@@ -1,0 +1,28 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import http from 'node:http';
+import {mkdtemp,rm} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+process.env.DATA_DIR=await mkdtemp(join(tmpdir(),'orbit-test-'));
+const {default:handler}=await import('../server/handler.js');
+const server=http.createServer(handler);await new Promise(r=>server.listen(0,'127.0.0.1',r));const base=`http://127.0.0.1:${server.address().port}/api`;
+const request=async(action,method='GET',data,cookie,origin)=>{const res=await fetch(`${base}?action=${action}`,{method,headers:{'Content-Type':'application/json',...(cookie?{cookie}:{}),...(origin?{origin}:{})},body:data?JSON.stringify(data):undefined});return {status:res.status,body:await res.json(),cookie:res.headers.get('set-cookie')?.split(';')[0]};};
+test('authenticated API persistence, user isolation, conflict detection, imports and logout',async()=>{
+ assert.equal((await request('state')).status,401);
+ const a=await request('register','POST',{name:'Test Student',email:'student@example.test',password:'testing-password-123'});assert.equal(a.status,200);assert.ok(a.cookie?.startsWith('orbit_session='));
+ const b=await request('register','POST',{name:'Other Student',email:'other@example.test',password:'testing-password-456'});assert.equal(b.status,200);
+ let doc=await request('state','GET',null,a.cookie);assert.equal(doc.body.state.profile.name,'Test Student');const saved=structuredClone(doc.body.state);saved.tasks.push({id:'task-1',title:'Private task',domain:'Academics',duration:45,completedMinutes:0,due:'2026-10-01',priority:3,status:'pending',notes:'',goalId:'',created:'2026-09-16'});
+ assert.equal((await request('state','PUT',{state:saved,version:doc.body.version},a.cookie)).status,200);
+ assert.equal((await request('state','PUT',{state:saved,version:doc.body.version},a.cookie)).status,409);
+ doc=await request('state','GET',null,a.cookie);assert.equal(doc.body.state.tasks[0].title,'Private task');
+ assert.equal((await request('state','GET',null,b.cookie)).body.state.tasks.length,0);
+ saved.profile.availableMinutes=-1;assert.equal((await request('state','PUT',{state:saved,version:doc.body.version},a.cookie)).status,400);
+ assert.equal((await request('state','PUT',{state:doc.body.state,version:doc.body.version},a.cookie,'https://attacker.example')).status,403);
+ const ai=await request('assist','POST',{text:'Finish Java assignment by Friday 90 minutes',today:'2026-09-16',useAI:false},a.cookie);assert.equal(ai.status,200);assert.equal(ai.body.tasks[0].due,'2026-09-18');assert.equal(ai.body.source,'Local rules');
+ assert.equal((await request('logout','POST',{},a.cookie)).status,200);assert.equal((await request('state','GET',null,a.cookie)).status,401);
+ assert.equal((await request('login','POST',{email:'student@example.test',password:'wrong-password'})).status,401);
+ const login=await request('login','POST',{email:'student@example.test',password:'testing-password-123'});assert.equal(login.status,200);assert.equal((await request('state','GET',null,login.cookie)).body.state.tasks.length,1);
+ assert.equal((await request('account','DELETE',{},login.cookie)).status,200);assert.equal((await request('state','GET',null,login.cookie)).status,401);
+});
+test.after(async()=>{server.closeAllConnections();await new Promise(r=>server.close(r));await rm(process.env.DATA_DIR,{recursive:true,force:true});});

@@ -1,0 +1,27 @@
+export function interpretCommand(text){
+ const raw=text.trim(),s=raw.toLowerCase().replace(/[.!?]+$/,'');
+ if(/^(read|speak|tell me)( out)?( aloud)? (my |today.?s |the )?(plan|schedule)|मेरा प्लान पढ़ो/.test(s))return {type:'read'};
+ if(/^(plan my day|generate( my| a| today.?s)? plan|मेरा दिन प्लान करो)$/.test(s))return {type:'plan'};
+ if(/^(replan|reschedule)( my| the)?( remaining)?( day| plan)?$/.test(s))return {type:'replan'};
+ const add=raw.match(/^(?:add(?: a)? task|create(?: a)? task|remind me to|टास्क जोड़ो)\s*[:,-]?\s+(.+)/i);if(add)return {type:'add',text:add[1]};
+ const finish=raw.match(/^(?:complete task|finish task)\s+(.+)/i);if(finish)return {type:'complete',text:finish[1]};
+ const focus=raw.match(/^(?:start focus on|focus on)\s+(.+)/i);if(focus)return {type:'focus',text:focus[1]};
+ const routes={'ai assistant':'AI assistant','assistant':'AI assistant','today':'Today','dashboard':'Today','plan':'Planner','planner':'Planner','schedule':'Planner','tasks':'Tasks','goals':'Goals','habits':'Habits','wellness':'Wellness','health':'Wellness','money':'Money','finance':'Money','digital balance':'Digital balance','insights':'Insights','settings':'Settings','integrations':'Integrations'};
+ const dest=s.replace(/^(?:open|show|go to)(?: my| the)?\s+/,'');if(routes[dest])return {type:'navigate',view:routes[dest]};
+ return {type:'unknown'};
+}
+export function createVoiceAssistant({openModal,onCommand,getSummary}){
+ let recognition;
+ function stop(){recognition?.abort();recognition=null;globalThis.speechSynthesis?.cancel();}
+ function speak(text,lang='en-IN'){if(!globalThis.speechSynthesis)throw new Error('Spoken playback is unavailable in this browser');speechSynthesis.cancel();const utterance=new SpeechSynthesisUtterance(text);utterance.lang=lang;utterance.rate=.95;speechSynthesis.speak(utterance);}
+ function open(){
+  const Recognition=globalThis.SpeechRecognition||globalThis.webkitSpeechRecognition;
+  openModal('Your voice, a little more organised.',`<p>Capture a task, open a life area or hear today’s plan.</p><p class="small muted">${Recognition?'Microphone access starts only when you press Listen. Your browser’s speech service may process audio online. Orbit does not save audio.':'Speech recognition is unavailable in this browser. Type a command below; spoken playback may still work. Try Chrome or Edge for microphone input.'}</p><label class="field"><span>Recognition language</span><select id="voice-language"><option value="en-IN">English (India)</option><option value="hi-IN">Hindi (India)</option><option value="en-US">English (US)</option></select></label><div class="voice-actions"><button type="button" class="btn primary" id="voice-listen" ${Recognition?'':'disabled'}>Listen</button><button type="button" class="btn" id="voice-stop">Stop listening</button><button type="button" class="btn" id="voice-read">Read my plan</button></div><p id="voice-status" class="voice-state" role="status">Ready when you are.</p><label class="field"><span>Review or type your command</span><textarea id="voice-command" rows="3" maxlength="1000" placeholder="Add task finish my Java assignment by Friday, 90 minutes"></textarea></label><button type="button" class="btn primary" id="voice-run">Run command</button><p id="voice-error" class="form-error" role="alert"></p><details class="voice-help"><summary>Things you can say</summary><ul><li>“Add task revise chapter two tomorrow, 45 minutes”</li><li>“Plan my day” or “Replan my remaining day”</li><li>“Open goals” or “Open wellness”</li><li>“Read my plan”</li><li>“Complete task [exact task title]”</li><li>“Focus on [exact task title]”</li><li>Hindi: “टास्क जोड़ो …” or “मेरा प्लान पढ़ो”</li></ul><p class="small muted">Review transcription before running. Task completion opens a review form. Spoken commands use local rules; arbitrary conversation is not supported.</p></details>`);
+  const byId=id=>document.getElementById(id),status=byId('voice-status'),error=byId('voice-error');
+  byId('voice-listen').onclick=()=>{try{recognition?.abort();recognition=new Recognition();recognition.lang=byId('voice-language').value;recognition.interimResults=true;recognition.continuous=false;recognition.onstart=()=>{status.textContent='Listening… speak your command.';};recognition.onresult=e=>{byId('voice-command').value=Array.from(e.results).map(r=>r[0].transcript).join(' ');};recognition.onerror=e=>{status.textContent=e.error==='not-allowed'?'Microphone permission was denied. Allow microphone access or type your command.':`Speech recognition stopped (${e.error}). You can type instead.`;};recognition.onend=()=>{if(status.textContent.startsWith('Listening'))status.textContent='Review the text, then run your command.';};recognition.start();}catch(e){error.textContent=e.message;}};
+  byId('voice-stop').onclick=()=>{recognition?.stop();status.textContent='Stopped. Review or type your command.';};
+  byId('voice-read').onclick=()=>{try{speak(getSummary(),'en-IN');}catch(e){error.textContent=e.message;}};
+  byId('voice-run').onclick=async()=>{error.textContent='';try{const command=interpretCommand(byId('voice-command').value);if(command.type==='unknown')throw new Error('Try one of the example commands below. To capture a task, begin with “Add task”.');recognition?.stop();if(command.type==='read'){speak(getSummary());return;}await onCommand(command);}catch(e){error.textContent=e.message;}};
+ }
+ return {open,stop};
+}
