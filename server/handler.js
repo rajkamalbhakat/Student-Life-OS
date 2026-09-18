@@ -19,7 +19,7 @@ export default async function handler(req,res){
       if((origin&&origin!==expected)||req.headers['sec-fetch-site']==='cross-site')throw new HttpError(403,'Request origin rejected');
       if(!req.headers['content-type']?.includes('application/json'))throw new HttpError(415,'JSON is required');
     }
-    if(action==='health')return json(res,200,{ok:true,storage:process.env.DATABASE_URL?'postgres':'sqlite'});
+    if(action==='health'){await query('SELECT 1 AS ready');return json(res,200,{ok:true,storage:process.env.DATABASE_URL||process.env.POSTGRES_URL?'postgres':'sqlite'});}
     const user=await session(req);
     if(action==='session'&&req.method==='GET')return json(res,200,{user,aiEnabled:!!process.env.OPENAI_API_KEY});
     if(['register','login','demo'].includes(action)&&req.method==='POST'){
@@ -61,7 +61,7 @@ export default async function handler(req,res){
       check(b.sharePlanning===undefined||typeof b.sharePlanning==='boolean','Invalid sharing option');
       const history=b.history||[];
       check(Array.isArray(history)&&history.length<=12&&history.every(h=>h&&['user','assistant'].includes(h.role)&&typeof h.content==='string'&&h.content.length<=10000),'Invalid conversation history');
-      if(!process.env.OPENAI_API_KEY)throw new HttpError(503,'AI is not configured. Add OPENAI_API_KEY to your project .env file, then restart Orbit.');
+      if(!process.env.OPENAI_API_KEY)throw new HttpError(503,'The AI assistant is not available yet. You can still use your planner and other tools.');
       if(await limited('ai:'+user.id,20,3600000))throw new HttpError(429,'Assistant limit reached. Try again in an hour.');
       let context=null;
       if(b.sharePlanning){const row=(await query('SELECT body FROM documents WHERE user_id=$1',[user.id])).rows[0];context=planningContext(JSON.parse(row.body));}
@@ -82,5 +82,5 @@ export default async function handler(req,res){
       return json(res,200,{tasks,source});
     }
     throw new HttpError(404,'Action not found');
-  }catch(error){const status=error.status||500;if(status===500)console.error('Request failed:',error.code||error.name);return json(res,status,{error:status===500?'The server could not complete this request. Check server configuration and try again.':error.message});}
+  }catch(error){if(error.code==='STORAGE_NOT_CONFIGURED')return json(res,503,{error:'Account services are temporarily unavailable. Please try again after the site owner finishes setup.',code:'STORAGE_NOT_CONFIGURED'});const status=error.status||500;if(status===500)console.error('Request failed:',error.code||error.name);return json(res,status,{error:status===500?'The server could not complete this request. Check server configuration and try again.':error.message});}
 }

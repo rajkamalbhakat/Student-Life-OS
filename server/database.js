@@ -2,12 +2,13 @@ import { mkdirSync } from 'node:fs';
 let ready;
 async function init(){
   let q;
-  if(process.env.DATABASE_URL){
+  const connectionString=process.env.DATABASE_URL||process.env.POSTGRES_URL;
+  if(connectionString){
     const {default:pg}=await import('pg');
-    const pool=new pg.Pool({connectionString:process.env.DATABASE_URL,max:3,connectionTimeoutMillis:10000});
+    const pool=new pg.Pool({connectionString,max:3,connectionTimeoutMillis:10000});
     q=async(sql,params=[])=>{const r=await pool.query(sql,params);return {rows:r.rows,changes:r.rowCount};};
   }else{
-    if(process.env.VERCEL)throw new Error('DATABASE_URL is required for hosted persistence');
+    if(process.env.VERCEL){const error=new Error('Hosted database is not configured');error.code='STORAGE_NOT_CONFIGURED';throw error;}
     const {DatabaseSync}=await import('node:sqlite');mkdirSync(process.env.DATA_DIR||'data',{recursive:true});
     const db=new DatabaseSync(`${process.env.DATA_DIR||'data'}/orbit.sqlite`);db.exec('PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;');
     q=async(sql,params=[])=>{const statement=db.prepare(sql.replace(/\$\d+/g,'?'));if(/^\s*(SELECT|WITH)/i.test(sql))return {rows:statement.all(...params),changes:0};const r=statement.run(...params);return {rows:[],changes:Number(r.changes)};};
